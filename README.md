@@ -14,13 +14,15 @@ Then follow the add-on installation instructions for your Blender version:
 * [2.9x](https://docs.blender.org/manual/en/2.90/editors/preferences/addons.html#installing-add-ons)
 * [3.x](https://docs.blender.org/manual/en/3.0/editors/preferences/addons.html#installing-add-ons)
 * [Latest](https://docs.blender.org/manual/en/latest/editors/preferences/addons.html#installing-add-ons)
+## Changelog
 
-## TODO
 ### Import
-* Animation is not yet implemented in version 1.0. Check master branch for updates.
-* Nodes use original quaternion rotation that affects user interface.
-Maybe convert them into euler angles.
 
+* **Skeletal animation is now supported** — B3D BONE + KEYS chunks are imported as Blender pose animations.
+  Bones are placed correctly via world-matrix head/tail with roll computed from the B3D rest-pose quaternion.
+  The animation delta (`rest_rot⁻¹ @ key_q`) ensures identity at frame 0.
+
+* Still uses original quaternion rotation (no Euler conversion).
 ## History
 Blitz3D was a game engine developed by Blitz Research (Mark Sibly) in 2001 utilizing the Blitz BASIC language and bringing with it the B3D format.  
 [Source](https://github.com/blitz-research/blitz3d) | [Website](https://web.archive.org/web/20170724000113/http://www.blitzbasic.com/) | [Wikipedia](https://en.wikipedia.org/wiki/Blitz_BASIC)  
