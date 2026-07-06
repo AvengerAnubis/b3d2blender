@@ -24,181 +24,125 @@ def flip_all(v):
 
 material_mapping = {}
 weighting = {}
+imported_armature_objects = []
 
-"""
-def make_skeleton(node):
-
-    objName = 'armature'
-    a = bpy.data.objects.new(objName, bpy.data.armatures.new(objName))
-
-    armatures.append(a);
-    ctx.scene.collection.objects.link(a)
-
-    for i in bpy.context.selected_objects: i.select_set(state=False)
-
-    a.select_set(state=True)
-    a.show_in_front = True
-    a.data.display_type = 'STICK'
-
-    bpy.context.view_layer.objects.active = a
-
-    bpy.ops.object.mode_set(mode='EDIT',toggle=False)
-
-    bones = {}
-
-    # copy bones positions from precalculated objects
-    for bone_id, (name, pos, rot, parent_id) in enumerate(bonesdata):
-        if name not in bpy.data.objects:
-            return
-
-        ob = bpy.data.objects[name]
-        #if parent_id != -1: name = ob.parent.name
-        bone = a.data.edit_bones.new(name)
-        bones[bone_id] = bone
-        v = ob.matrix_world.to_translation()
-
-        # use short segment as a bone (smd-like hierarchy), will convert later
-        bone.tail = ob.matrix_world.to_translation()
-        bone.head = (v[0]-0.01,v[1],v[2])
-
-        if parent_id != -1:
-            bone.parent = bones[parent_id]
-            #bone.head = ob.parent.matrix_world.to_translation()
-
-    # delete all objects with the same names as the bones
-    for name, pos, rot, parent_id in bonesdata:
-        try:
-            bpy.data.objects.remove(bpy.data.objects[name])
-        except:
-            pass
-
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    #for i in bpy.context.selected_objects: i.select = False #deselect all objects
-    for i in bpy.context.selected_objects: i.select_set(state=False) #deselect all objects #2.8 fails
-
-    # get parent mesh (hardcoded so far)
-    objName = 'anim'
-    if objName in bpy.data.objects.keys():
-        ob = bpy.data.objects[objName]
-    else:
+def import_animations(data):
+    frames = data.get('frames', 1)
+    fps = data.get('fps', 30) or 30
+    print(f"[b3d] animation: frames={frames}, fps={fps}, armatures={len(imported_armature_objects)}")
+    if frames <= 1 or not imported_armature_objects:
+        print("[b3d] no animation to import (no frames or no armature)")
         return
 
-    # apply armature modifier
-    modifier = ob.modifiers.new(type="ARMATURE", name="armature")
-    modifier.object = a
+    def collect_key_nodes(node, out):
+        if node.get('keys') and node.name:
+            out[node.name] = node
+            print(f"[b3d] found keys for node '{node.name}' ({len(node['keys'])} keys)")
+        for child in node.get('nodes', []):
+            collect_key_nodes(child, out)
 
-    # create vertex groups
-    for bone in a.data.bones.values():
-        group = ob.vertex_groups.new(name=bone.name)
-        if bone.name in weighting.keys():
-            for vertex_id, weight in weighting[bone.name]:
-                #vertex_id = remaps[objName][vertex_id]
-                group_indices = [vertex_id]
-                group.add(group_indices, weight, 'REPLACE')
+    key_nodes = {}
+    for root in data.get('nodes', []):
+        collect_key_nodes(root, key_nodes)
 
+    print(f"[b3d] key_nodes: {list(key_nodes.keys())}")
+    if not key_nodes:
+        print("[b3d] no nodes with keys found")
+        return
 
-    actionName = 'default_action'
-    action = bpy.data.actions.new(actionName)
-    action.use_fake_user = True
+    for arm_obj in imported_armature_objects:
+        action = bpy.data.actions.new(name='b3d_action')
+        action.use_fake_user = True
+        arm_obj.animation_data_create()
+        arm_obj.animation_data.action = action
 
-    a.animation_data_create()
-    a.animation_data.action = action
+        bone_names = [b.name for b in arm_obj.data.bones]
+        print(f"[b3d] armature bones: {bone_names}")
+        created_fcurves = []
 
+        for bone in arm_obj.data.bones:
+            node = key_nodes.get(bone.name)
+            if not node:
+                continue
+            keys = node['keys']
+            if not keys:
+                continue
 
-    #action.fps = 30fps if fps else 30
-    bpy.context.scene.render.fps = 60
-    bpy.context.scene.render.fps_base = 1
+            rest_pos = flip(node.get('position', (0,0,0)))
+            rest_rot = mathutils.Quaternion(flip(node.get('rotation', (1,0,0,0))))
+            rest_scl = flip(node.get('scale', (1,1,1)))
 
-    #ops.object.mode_set(mode='POSE')
-    bpy.context.scene.frame_start = 0
-    bpy.context.scene.frame_end = node.frames - 1
+            pos_keys = [k for k in keys if 'position' in k]
+            rot_keys = [k for k in keys if 'rotation' in k]
+            scl_keys = [k for k in keys if 'scale' in k]
 
+            if pos_keys:
+                first = pos_keys[0].frame
+                n = len(pos_keys)
+                print(f"[b3d] bone '{bone.name}': {n} position keys")
+                for axis in range(3):
+                    fc = action.fcurve_ensure_for_datablock(arm_obj, f'pose.bones["{bone.name}"].location', index=axis, group_name=bone.name)
+                    fc.keyframe_points.add(n)
+                    for i, k in enumerate(pos_keys):
+                        val = flip(k.position)[axis] - rest_pos[axis]
+                        fc.keyframe_points[i].co = (k.frame - first, val)
+                        fc.keyframe_points[i].interpolation = 'LINEAR'
+                    created_fcurves.append(fc)
 
-    ## ANIMATION!
-    bone_string = 'Bip01'
+            if rot_keys:
+                first = rot_keys[0].frame
+                n = len(rot_keys)
+                print(f"[b3d] bone '{bone.name}': {n} rotation keys")
+                for axis in range(4):
+                    fc = action.fcurve_ensure_for_datablock(arm_obj, f'pose.bones["{bone.name}"].rotation_quaternion', index=axis, group_name=bone.name)
+                    fc.keyframe_points.add(n)
+                    for i, k in enumerate(rot_keys):
+                        key_q = mathutils.Quaternion(flip(k.rotation))
+                        relative_q = rest_rot.inverted() @ key_q
+                        fc.keyframe_points[i].co = (k.frame - first, relative_q[axis])
+                        fc.keyframe_points[i].interpolation = 'LINEAR'
+                    created_fcurves.append(fc)
 
-    curvesLoc = None
-    curvesRot = None
-    bone_string = "pose.bones[\"{}\"].".format(bone.name)
-    group = action.groups.new(name=bone_string)
+            if scl_keys:
+                first = scl_keys[0].frame
+                n = len(scl_keys)
+                print(f"[b3d] bone '{bone.name}': {n} scale keys")
+                for axis in range(3):
+                    fc = action.fcurve_ensure_for_datablock(arm_obj, f'pose.bones["{bone.name}"].scale', index=axis, group_name=bone.name)
+                    fc.keyframe_points.add(n)
+                    for i, k in enumerate(scl_keys):
+                        val = flip(k.scale)[axis] / rest_scl[axis] if rest_scl[axis] != 0 else 1.0
+                        fc.keyframe_points[i].co = (k.frame - first, val)
+                        fc.keyframe_points[i].interpolation = 'LINEAR'
+                    created_fcurves.append(fc)
 
-    for bone_id, (name, keys, rot, parent_id) in enumerate(bonesdata):
-        for frame in range(node.frames):
-            # (unoptimized) walk through all keys and select the frame
-            for key in keys:
-                if key.frame==frame:
-                    pass
-                    #print(name, key)
-    for keyframe in range(node.frames):
-        if curvesLoc and curvesRot: break
-        if keyframe.pos and not curvesLoc:
-            curvesLoc = []
-            for i in range(3):
-                curve = action.fcurves.new(data_path=bone_string + "location",index=i)
-                curve.group = group
-                curvesLoc.append(curve)
-        if keyframe.rot and not curvesRot:
-            curvesRot = []
-            for i in range(3 if smd.rotMode == 'XYZ' else 4):
-                curve = action.fcurves.new(data_path=bone_string + "rotation_" + ("euler" if smd.rotMode == 'XYZ' else "quaternion"),index=i)
-                curve.group = group
-                curvesRot.append(curve)
-
-
-    for i in range(3):
-        curve = action.fcurves.new(data_path=bone_string + "location",index=i)
-        group = action.groups.new(name=bone_name)
-        curve.group = group
-
-    location = (10,50,100)
-    for frame in range(node.frames):
-        for i in range(3):
-            curve.keyframe_points.add(1)
-            curve.keyframe_points[-1].co = [frame, location[i]]
-
-    curve = action.fcurves.new(data_path=bone_string + "rotation_quaternion",index=i)
-    group = action.groups.new(name=bone_name)
-    curve.group = group
-
-    rotation = (1,0,1,0)
-        for i in range(4):
-          curvesRot[i].keyframe_points.add(1)
-          curvesRot[i].keyframe_points[-1].co = [keyframe.frame, bone.rotation_quaternion[i]]
-
-    #curve = action.fcurves.new(data_path=bone_string + "rotation_quaternion",index=i)
-"""
+        print(f"[b3d] created {len(created_fcurves)} fcurves for action '{action.name}'")
+        for fc in created_fcurves:
+            fc.update()
 
 def import_mesh(node, parent):
     global material_mapping
 
     mesh = bpy.data.meshes.new(node.name)
 
-    # join face arrays
     faces = []
     for face in node.faces:
         faces.extend(face.indices)
 
-    # create mesh from data
     mesh.from_pydata(flip_all(node.vertices), [], flip_all(faces))
 
-    # assign normals
     mesh.vertices.foreach_set('normal', unpack_list(node.normals))
 
-    # create object from mesh
     ob = bpy.data.objects.new(node.name, mesh)
 
-    # assign uv coordinates
     bpymesh = ob.data
     uvs = [(0,0) if len(uv)==0 else (uv[0], 1-uv[1]) for uv in node.uvs]
     uvlist = [i for poly in bpymesh.polygons for vidx in poly.vertices for i in uvs[vidx]]
     bpymesh.uv_layers.new().data.foreach_set('uv', uvlist)
 
-    # adding object materials (insert-ordered)
     for key, value in material_mapping.items():
         ob.data.materials.append(bpy.data.materials[value])
 
-    # assign material_indexes
     poly = 0
     for face in node.faces:
         for _ in face.indices:
@@ -212,25 +156,52 @@ def select_recursive(root):
         select_recursive(c)
     root.select_set(state=True)
 
+def set_editbone_rotation(bone, desired_quat):
+    bone.roll = 0.0
+    q0 = bone.matrix.to_quaternion()
+    diff = q0.inverted() @ desired_quat
+    angle = diff.angle
+    axis = diff.axis
+    y_local = mathutils.Vector((0.0, 1.0, 0.0))
+    if axis.dot(y_local) > 0.5:
+        bone.roll = angle
+    elif axis.dot(y_local) < -0.5:
+        bone.roll = -angle
+    else:
+        bone.roll = 0.0
+
 def make_armature_recursive(root, a, parent_bone):
     bone = a.data.edit_bones.new(root.name)
-    v = root.matrix_world.to_translation()
-    bone.tail = v
-    # bone.head = (v[0]-0.01,v[1],v[2]) # large handles!
+    world_mat = root.matrix_world
+    head = world_mat.to_translation()
+    desired_quat = world_mat.to_quaternion()
+    y_axis = desired_quat @ mathutils.Vector((0.0, 1.0, 0.0))
+
+    children = root.children
+    if children:
+        child_pos = children[0].matrix_world.to_translation()
+        length = (child_pos - head).length
+    else:
+        length = 1.0
+    if length < 0.01:
+        length = 1.0
+
+    bone.head = head
+    bone.tail = head + y_axis * length
     bone.parent = parent_bone
-    if bone.parent:
-        bone.head = bone.parent.tail
-    parent_bone = bone
+    set_editbone_rotation(bone, desired_quat)
+
     for c in root.children:
-        make_armature_recursive(c, a, parent_bone)
+        make_armature_recursive(c, a, bone)
 
 def make_armatures():
     global ctx
-    global imported_armatures, weighting
+    global imported_armatures, weighting, imported_armature_objects
 
     for dummy_root in imported_armatures:
         objName = 'armature'
         a = bpy.data.objects.new(objName, bpy.data.armatures.new(objName))
+        imported_armature_objects.append(a)
         ctx.scene.collection.objects.link(a)
         for i in bpy.context.selected_objects: i.select_set(state=False)
         a.select_set(state=True)
@@ -242,20 +213,16 @@ def make_armatures():
         make_armature_recursive(dummy_root, a, None)
         bpy.ops.object.mode_set(mode='OBJECT',toggle=False)
 
-        # set ob to mesh object
         ob = dummy_root.parent
         a.parent = ob
 
-        # delete dummy objects hierarchy
         for i in bpy.context.selected_objects: i.select_set(state=False)
         select_recursive(dummy_root)
         bpy.ops.object.delete(use_global=True)
 
-        # apply armature modifier
         modifier = ob.modifiers.new(type="ARMATURE", name="armature")
         modifier.object = a
 
-        # create vertex groups
         for bone in a.data.bones.values():
             group = ob.vertex_groups.new(name=bone.name)
             if bone.name in weighting.keys():
@@ -266,16 +233,13 @@ def make_armatures():
 
 def import_bone(node, parent=None):
     global imported_armatures, weighting
-    # add dummy objects to calculate bone positions later
     ob = bpy.data.objects.new(node.name, None)
 
-    # fill weighting map for later use
     w = []
     for vert_id, weight in node['bones']:
         w.append((vert_id, weight))
     weighting[node.name] = w
 
-    # check parent, add root armature
     if parent and parent.type=='MESH':
         imported_armatures.append(ob)
 
@@ -318,7 +282,6 @@ def load_b3d(filepath,
     ctx = context
     data = B3DTree().parse(filepath)
 
-    # load images
     images = {}
     dirname = os.path.dirname(filepath)
     for i, texture in enumerate(data['textures'] if 'textures' in data else []):
@@ -328,7 +291,6 @@ def load_b3d(filepath,
                 images[i] = (texture_name, load_image(texture_name, dirname, check_existing=True,
                     place_holder=False, recursive=IMAGE_SEARCH))
 
-    # create materials
     material_mapping = {}
     for i, mat in enumerate(data.materials if 'materials' in data else []):
         material = bpy.data.materials.new(mat.name)
@@ -350,9 +312,11 @@ def load_b3d(filepath,
     global imported_armatures, weighting
     imported_armatures = []
     weighting = {}
+    imported_armature_objects = []
 
     import_node_recursive(data)
     make_armatures()
+    import_animations(data)
 
 def load(operator,
          context,
