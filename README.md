@@ -5,9 +5,7 @@ Should work with versions 2.8x, 2.9x, 3.x, and 4.x.
 
 ## Installation
 Download the ZIP file:
-* [Master](https://github.com/GreenXenith/io_scene_b3d/archive/refs/heads/master.zip)
-* [Latest release](https://github.com/GreenXenith/io_scene_b3d/releases/latest/)
-* [All releases](https://github.com/GreenXenith/io_scene_b3d/releases)  
+* [Master](https://github.com/AvengerAnubis/b3d2blender/archive/refs/heads/master.zip)
 
 Then follow the add-on installation instructions for your Blender version:
 * [2.8x](https://docs.blender.org/manual/en/2.80/editors/preferences/addons.html#rd-party-add-ons)
